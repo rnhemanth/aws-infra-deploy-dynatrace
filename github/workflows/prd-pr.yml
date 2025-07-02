@@ -1,0 +1,114 @@
+name: PRD - Pull request
+on: 
+  workflow_dispatch:
+    inputs:
+      Environment:
+        description: 'AWS Account name'
+        required: true
+        type: choice
+        default: "SELECT ACCOUNT"
+        options:
+          #- "accutedevtest-prd-acc"
+          #- "cds-prd-acc"
+          #- "cds-stg-acc"
+          - "cp-pscmpos-prd-acc"
+          #- "dssotw-prd-acc"
+          #- "egton-clicknext-prd-acc"
+          #- "egton-dhiftp-prd-acc"
+          #- "egton-gpweb-prd-acc"
+          #- "egton-intd-prd-acc"
+          #- "egton-mps-prd-acc"
+          #- "egton-onco-prd-acc"
+          #- "egton-patf-prd-acc"
+          #- "egton-sepm-prd-acc"
+          #- "egton-vigor-prd-acc"
+          #- "emis-dba-alerts-prd-acc"
+          #- "emispcspatching-prd-acc"
+          #- "epma-berkshire-prd-acc"
+          #- "epma-rowlands-prd-acc"
+          - "ew-eng-prd-acc"
+          - "ew-nations-prd-acc"
+          - "ew-ss-prd-acc"
+          - "eweblogs-ibi-prd-acc"
+          #- "ewgp-eng-bck01-prd-acc"
+          #- "hosted-managedad-prd-acc"
+          #- "medsman-managedad-prd-acc"
+          #- "mig-sftp-prd-acc"
+          #- "non-ew-bck-prd-acc"
+          #- "patch-management-prd-acc"
+          #- "supporttool-prd-acc"
+
+      TerraformFolderName:
+        description: 'Choose Terraform Folder Name'
+        required: true
+        type: choice
+        default: "terraform"
+        options:
+            - "terraform"
+            - "collector-terraform"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Pull Request - Lint & Plan - ${{ github.event.inputs.Environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.Environment }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: terraform
+        uses: hashicorp/setup-terraform@v3
+                  
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.DEPLOYER_ROLE }}
+          role-session-name: deploy-role-session
+          aws-region: ${{ vars.AWS_REGION }}
+
+      #- uses: navikt/github-app-token-generator@v1
+      - uses: navikt/github-app-token-generator@b96ff604b2300989cd1105e3fad09199fca56681
+        id: get-token
+        with:
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+
+      - name: Pull & update submodules recursively
+        run: |
+          git config --global --replace-all url."https://token:${GH_TOKEN}@github.com/emisgroup".insteadOf "https://github.com/emisgroup"
+          git config --file=.gitmodules github-runner.url https://token:${GH_TOKEN}@github.com/emisgroup/github-runner.git
+          git submodule update --init --recursive
+        env:
+          GH_TOKEN : ${{ steps.get-token.outputs.token }}
+
+      - name: Run Checkov
+        #uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@360818f2ad44468d3294cfddae854a8c9036dfee
+        with:
+          directory: ../monitoring/${{ github.event.inputs.TerraformFolderName }}/
+          framework: terraform
+
+      - name: Deploy Terragrunt Plan
+        env: 
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} 
+          AWS_REGION : ${{ vars.AWS_REGION }} 
+          ENVIRONMENT : "prd" 
+          TF_VAR_DYN_AG_TOKEN : ${{ secrets.TF_VAR_DYN_AG_TOKEN }}
+          DYNATRACE_ENV_URL: ${{ secrets.DYNATRACE_ENV_URL }}
+          DYNATRACE_API_TOKEN: ${{ secrets.DYNATRACE_API_TOKEN }}
+          AWS_ACCOUNT: ${{ github.event.inputs.Environment }} 
+          GH_TOKEN : ${{ steps.get-token.outputs.token }} 
+          DEPLOYER_ROLE_ARN: 'arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.DEPLOYER_ROLE }}'
+          TF_VAR_DYN_OTEL_TOKEN: ${{ secrets.TF_VAR_DYN_OTEL_TOKEN }}
+        uses: ./github-runner/actions/terragrunt-plan 
+        with: 
+          terraform-folder: "../monitoring/${{ github.event.inputs.TerraformFolderName }}/" 
+          terragrunt-config: "./terragrunt.hcl"
+ 

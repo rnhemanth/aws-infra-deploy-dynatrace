@@ -1,0 +1,106 @@
+name: Deploy - Dev resources
+on: 
+  workflow_dispatch: 
+    inputs: 
+      Environment: 
+        description: 'AWS Account name'
+        required: true
+        type: choice
+        default: "SELECT ACCOUNT"
+        options: 
+        #  - "cds-dev-acc"
+        #  - "dssotw-dev-acc"
+        #  - "egton-intradc-dev-acc"
+        #  - "egton-mps-dev-acc"
+        #  - "emispcspatching-dev-acc"
+          - "epma-berkshire-dev-acc"
+        #  - "epma-rowlands-dev-acc"
+          - "ew-eng-dev-acc"
+          - "ew-nations-dev-acc"
+          - "ew-ss-dev-acc"
+          - "eweblogs-ibi-dev-acc"
+          - "eisdevtest-prd-acc"
+        #  - "ewgp-eng-bck01-dev-acc"
+        #  - "hosted-managedad-dev-acc"
+        #  - "managedad-dev-acc"
+        #  - "medsman-dev-acc"
+        #  - "medsman-managedad-dev-acc"
+        #  - "mig-sftp-dev-acc"
+        #  - "non-ew-bck-dev-acc"
+        #  - "pharmoutcomesmongoarbs-dev-acc"
+        #  - "scriptcheck-dev-acc"
+        #  - "supporttool-dev-acc"
+        #  - "ukc-devtools-dev-acc"
+      TerraformFolderName:
+        description: 'Choose Terraform Folder Name'
+        required: true
+        type: choice
+        default: "terraform"
+        options:
+          - "terraform"
+          - "collector"
+permissions: 
+  id-token: write 
+  contents: read 
+jobs: 
+  deploy: 
+    name: Deploy - ${{ github.event.inputs.Environment }}
+    runs-on: ubuntu-latest 
+    environment: 
+      name: ${{ github.event.inputs.Environment }}
+    steps: 
+      - name: Checkout Code 
+        uses: actions/checkout@v4 
+        with: 
+          fetch-depth: 0
+          lfs: true  # Ensures Git LFS files are fetched
+      # Step 2: Pull LFS files explicitly (optional but ensures correctness)
+      - name: Verify LFS Files
+        run: git lfs pull 
+      # Step 3: Verify file size and type (debugging step) 
+      #- name: Check File Size
+      #  run: |
+      #    ls -lh monitoring/agent/
+      #    file monitoring/agent/Dynatrace-OneAgent-Windows.exe
+      - name: terraform
+        uses: hashicorp/setup-terraform@v3
+      - name: Configure AWS Credentials 
+        uses: aws-actions/configure-aws-credentials@v4 
+        with: 
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.DEPLOYER_ROLE }} 
+          role-session-name: deploy-role-session 
+          aws-region: ${{ vars.AWS_REGION }} 
+      - uses: navikt/github-app-token-generator@v1 
+        id: get-token 
+        with: 
+          private-key: ${{ secrets.APP_PRIVATE_KEY }} 
+          app-id: ${{ secrets.APP_ID }} 
+      - name: Pull & update submodules recursively 
+        run: | 
+          git config --global url."https://token:${GH_TOKEN}@github.com/emisgroup".insteadOf "https://github.com/emisgroup"
+          git config --file=.gitmodules github-runner.url https://token:${GH_TOKEN}@github.com/emisgroup/github-runner.git
+          git submodule update --init --recursive
+        env: 
+          GH_TOKEN : ${{ steps.get-token.outputs.token }} 
+      - name: Run Checkov 
+        uses: bridgecrewio/checkov-action@master 
+        with: 
+          directory: ../monitoring/${{ github.event.inputs.TerraformFolderName }}/
+          framework: terraform 
+      - name: Deploy Terragrunt 
+        env: 
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} 
+          AWS_REGION : ${{ vars.AWS_REGION }} 
+          ENVIRONMENT : "dev"
+          TF_VAR_DYN_AG_TOKEN : ${{ secrets.TF_VAR_DYN_AG_TOKEN }}
+          DYNATRACE_ENV_URL: ${{ secrets.DYNATRACE_ENV_URL }}
+          DYNATRACE_API_TOKEN: ${{ secrets.DYNATRACE_API_TOKEN }}
+          AWS_ACCOUNT: ${{ github.event.inputs.Environment }} 
+          GH_TOKEN : ${{ steps.get-token.outputs.token }} 
+          DEPLOYER_ROLE_ARN: 'arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.DEPLOYER_ROLE }}'
+          #added
+          TF_VAR_DYN_OTEL_TOKEN: ${{ secrets.TF_VAR_DYN_OTEL_TOKEN }}
+        uses: ./github-runner/actions/terragrunt-apply 
+        with: 
+          terraform-folder: "../monitoring/${{ github.event.inputs.TerraformFolderName }}/" 
+          terragrunt-config: "./terragrunt.hcl"
