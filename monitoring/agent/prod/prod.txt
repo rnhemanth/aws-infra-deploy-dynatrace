@@ -1,0 +1,1 @@
+This installer is only for PRD pointing to Dynatrace PROD  environment only.

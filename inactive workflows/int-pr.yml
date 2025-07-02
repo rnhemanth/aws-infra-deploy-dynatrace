@@ -1,0 +1,67 @@
+name: INT - Pull Request
+on:
+  pull_request:
+    branches:
+      - 'develop'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy:
+    name: Pull Request - Lint & Plan - Int
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [
+          "egton-onco-int-acc",
+          "supporttool-int-acc"
+          ]
+    environment:
+      name: ${{ matrix.environment }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.INT_DEPLOYER_ROLE }}
+          role-session-name: deploy-role-session
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: navikt/github-app-token-generator@v1
+        id: get-token
+        with:
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+
+      - name: Pull & update submodules recursively
+        run: |
+          git config --global url."https://token:${GH_TOKEN}@github.com/emisgroup".insteadOf "https://github.com/emisgroup"
+          git config --file=.gitmodules github-runner.url https://token:${GH_TOKEN}@github.com/emisgroup/github-runner.git
+          git submodule update --init --recursive
+        env:
+          GH_TOKEN : ${{ steps.get-token.outputs.token }}
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ./systems-manager-inventory/terraform/
+          framework : terraform
+
+      - name: Plan Terragrunt
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION : ${{ vars.AWS_REGION }}
+          ENVIRONMENT : "int"
+          AWS_ACCOUNT: ${{ matrix.environment }}
+          GH_TOKEN : ${{ steps.get-token.outputs.token }}
+          DEPLOYER_ROLE_ARN: 'arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.INT_DEPLOYER_ROLE }}'
+        uses: ./github-runner/actions/terragrunt-plan
+        with:
+          terraform-folder: "../systems-manager-inventory/terraform/"
+          terragrunt-config: "../terragrunt.hcl"
